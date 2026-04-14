@@ -1,0 +1,4 @@
+flask>=3.0
+# Local EndPointBlank Python library — install with:
+#   pip install -e ../end_point_blank_py
+end-point-blank-py @ file://../end_point_blank_py
