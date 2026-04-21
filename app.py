@@ -15,6 +15,8 @@ and response and forward them to the EndPointBlank ingest service.
 Equivalent to epb_test_rails in structure and purpose.
 """
 
+import subprocess
+
 from flask import Flask, jsonify
 
 import end_point_blank as epb
@@ -31,12 +33,22 @@ import data as db
 # Configure EndPointBlank
 # ---------------------------------------------------------------------------
 
+def _git_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=__file__[:__file__.rfind("/")]
+        ).decode().strip()
+    except Exception:
+        return "0"
+
+
 epb.configure(
     base_url="http://localhost:4001",
     app_name="ejb-test-py",
     environment="development",
     client_id="HyxhlEx4nT0cUIP9two3sbRiWbJGn+Iv",
     client_secret="6T+yIBMK6N63DpyoOxd0xkUK3ys6PbuV7azeYW4eJIHtm/5u26tXzAEPw1JmZwlJ",
+    application_version=_git_commit(),
 )
 
 # Patch log_base_url directly (configure() doesn't expose it yet)
