@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
 set -e
 cd "$(dirname "$0")"
-ulimit -n 8192
-export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
-.venv/bin/gunicorn --bind 0.0.0.0:3002 --workers 1 --threads 16 --timeout 300 app:app
+python -m waitress --host 0.0.0.0 --port "${PORT:-3002}" --threads 16 app:app
