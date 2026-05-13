@@ -41,7 +41,7 @@ from end_point_blank.middleware.report_interaction import ReportInteractionMiddl
 from end_point_blank.unauthorized_error import UnauthorizedError
 from end_point_blank.writers.log_writer import LogWriter
 
-import data as db
+import db
 
 # ---------------------------------------------------------------------------
 # Configure EndPointBlank
@@ -223,6 +223,8 @@ def trigger_error():
 # ---------------------------------------------------------------------------
 # Endpoint registration (runs at import time for gunicorn workers)
 # ---------------------------------------------------------------------------
+
+db.setup()
 
 with app.app_context():
     register_flask_endpoints(app)
