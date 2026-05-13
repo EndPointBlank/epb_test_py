@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -e
 cd "$(dirname "$0")"
-python -m waitress --host 0.0.0.0 --port "${PORT:-3002}" --threads 16 app:app
+python -m waitress --host 0.0.0.0 --port "${PORT:-3002}" --threads 16 --asyncore-use-poll app:app
