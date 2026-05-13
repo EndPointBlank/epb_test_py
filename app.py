@@ -62,8 +62,8 @@ epb.configure(
     base_url=INTAKE_URL,
     app_name="ejb-test-py",
     environment=os.environ.get("FLASK_ENV", "development"),
-    client_id="YOScUN1M9eFWawcMN14gfu/6d0y6RlvG",
-    client_secret="up3udV3drFAnjhcqUxDI0BXJ+Hr6Hd6wHwuZcQNXXpFj6RNkmTNH87E3QrH4OYrD",
+    client_id="Sb3PyThONd8EvPmQnLuTwFc4YjHgNvOq",
+    client_secret="xJ4pQmA7dN3sNkR2tE6bXeJiW0aFzGoBMaVnQkDpEyHwIlZcSxrUfOgtXu9P1J8",
     application_version=_git_commit(),
     log_mode=LogMode.DELAYED,
 )
