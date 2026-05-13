@@ -22,6 +22,7 @@ and response and forward them to the EndPointBlank ingest service.
 """
 
 import logging
+import os
 import subprocess
 
 logging.basicConfig(
@@ -55,17 +56,19 @@ def _git_commit() -> str:
         return "0"
 
 
+INTAKE_URL = os.environ.get("INTAKE_API_URL", "http://localhost:4001")
+
 epb.configure(
-    base_url="http://localhost:4001",
+    base_url=INTAKE_URL,
     app_name="ejb-test-py",
-    environment="development",
-    client_id="HyxhlEx4nT0cUIP9two3sbRiWbJGn+Iv",
-    client_secret="6T+yIBMK6N63DpyoOxd0xkUK3ys6PbuV7azeYW4eJIHtm/5u26tXzAEPw1JmZwlJ",
+    environment=os.environ.get("FLASK_ENV", "development"),
+    client_id="YOScUN1M9eFWawcMN14gfu/6d0y6RlvG",
+    client_secret="up3udV3drFAnjhcqUxDI0BXJ+Hr6Hd6wHwuZcQNXXpFj6RNkmTNH87E3QrH4OYrD",
     application_version=_git_commit(),
     log_mode=LogMode.DELAYED,
 )
 
-epb.Configuration().log_base_url = "http://localhost:4001"
+epb.Configuration().log_base_url = INTAKE_URL
 
 # ---------------------------------------------------------------------------
 # Flask app + middleware
