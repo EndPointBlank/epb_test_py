@@ -36,6 +36,11 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        "end_point_blank": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
     },
 }
 
