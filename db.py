@@ -9,7 +9,7 @@ def _get_pool():
     global _pool
     if _pool is None:
         dsn = os.environ.get("DATABASE_URL", "postgresql://localhost:5432/epb_test_py_development")
-        _pool = psycopg2.pool.ThreadedConnectionPool(1, 10, dsn)
+        _pool = psycopg2.pool.ThreadedConnectionPool(1, 36, dsn)
     return _pool
 
 
