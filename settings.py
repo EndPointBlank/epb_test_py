@@ -9,9 +9,35 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "access_log.AccessLogMiddleware",
     "end_point_blank.django.middleware.ReportInteractionMiddleware",
     "django.middleware.common.CommonMiddleware",
 ]
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "access",
+        },
+    },
+    "formatters": {
+        "access": {
+            "format": "[{asctime}] {message}",
+            "style": "{",
+            "datefmt": "%d/%b/%Y %H:%M:%S",
+        },
+    },
+    "loggers": {
+        "access": {
+            "handlers": ["console"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
 
 ROOT_URLCONF = "urls"
 WSGI_APPLICATION = "wsgi.application"
