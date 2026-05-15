@@ -44,6 +44,14 @@ LOGGING = {
     },
 }
 
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "TIMEOUT": 120,
+        "OPTIONS": {"MAX_ENTRIES": 5000},
+    }
+}
+
 ROOT_URLCONF = "urls"
 WSGI_APPLICATION = "wsgi.application"
 
