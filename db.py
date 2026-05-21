@@ -5,10 +5,20 @@ import psycopg2.extras
 
 _pool = None
 
+def _local_dsn():
+    """Local-dev fallback. Without explicit credentials libpq defaults to the
+    OS user, which usually isn't a Postgres role — match the repo's
+    postgres/postgres convention."""
+    user = os.environ.get("PGUSER", "postgres")
+    password = os.environ.get("PGPASSWORD", "postgres")
+    host = os.environ.get("PGHOST", "localhost")
+    return f"postgresql://{user}:{password}@{host}:5432/epb_test_py_development"
+
+
 def _get_pool():
     global _pool
     if _pool is None:
-        dsn = os.environ.get("DATABASE_URL", "postgresql://localhost:5432/epb_test_py_development")
+        dsn = os.environ.get("DATABASE_URL") or _local_dsn()
         _pool = psycopg2.pool.ThreadedConnectionPool(4, 16, dsn)
     return _pool
 

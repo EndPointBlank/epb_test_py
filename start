@@ -1,4 +1,13 @@
 #!/usr/bin/env bash
 set -e
 cd "$(dirname "$0")"
-python -m waitress --host 0.0.0.0 --port "${PORT:-3002}" --threads 16 --asyncore-use-poll wsgi:application
+
+# Prefer the project's virtualenv when present so we don't pick up whatever
+# `python` happens to be on PATH (pyenv shims, system Python 2, etc.).
+if [ -x ".venv/bin/python" ]; then
+  PYTHON=".venv/bin/python"
+else
+  PYTHON="python3"
+fi
+
+exec "$PYTHON" -m waitress --host 0.0.0.0 --port "${PORT:-3002}" --threads 16 --asyncore-use-poll wsgi:application
