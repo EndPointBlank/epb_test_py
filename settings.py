@@ -9,6 +9,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    "json_error_middleware.JsonErrorMiddleware",
     "access_log.AccessLogMiddleware",
     "django.middleware.common.CommonMiddleware",
 ]
