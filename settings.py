@@ -10,6 +10,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "json_error_middleware.JsonErrorMiddleware",
+    "end_point_blank.django.ReportInteractionMiddleware",
     "access_log.AccessLogMiddleware",
     "django.middleware.common.CommonMiddleware",
 ]

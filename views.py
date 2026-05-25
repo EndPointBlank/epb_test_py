@@ -8,6 +8,7 @@ from django.views.decorators.http import require_http_methods
 
 import end_point_blank as epb
 from end_point_blank.configuration import LogMode
+from end_point_blank.django import authorized
 from end_point_blank.django.versioned import versioned
 
 import db
@@ -54,6 +55,7 @@ def status(request):
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
+@authorized
 def schools(request):
     if request.method == "GET":
         return _list_schools(request)
@@ -79,6 +81,7 @@ def _create_school(request):
 
 @csrf_exempt
 @require_http_methods(["DELETE"])
+@authorized
 def school(request, school_id):
     return _delete_school(request, school_id)
 
@@ -97,6 +100,7 @@ def _delete_school(request, school_id):
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
+@authorized
 def classes(request):
     if request.method == "GET":
         return _list_classes(request)
@@ -123,6 +127,7 @@ def _create_class(request):
 
 @csrf_exempt
 @require_http_methods(["DELETE"])
+@authorized
 def single_class(request, class_id):
     return _delete_class(request, class_id)
 
@@ -141,6 +146,7 @@ def _delete_class(request, class_id):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@authorized
 def class_students(request, class_id):
     return _add_student(request, class_id)
 
@@ -160,6 +166,7 @@ def _add_student(request, class_id):
 
 @csrf_exempt
 @require_http_methods(["DELETE"])
+@authorized
 def class_student(request, class_id, student_id):
     return _remove_student(request, class_id, student_id)
 
@@ -178,6 +185,7 @@ def _remove_student(request, class_id, student_id):
 # ---------------------------------------------------------------------------
 
 @require_http_methods(["GET"])
+@authorized
 def errors(request):
     return _trigger_error(request)
 
