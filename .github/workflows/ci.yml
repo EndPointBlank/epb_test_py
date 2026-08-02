@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    # This repository's default branch is master, not main.
+    branches: [ master ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # The application opens a connection pool at import time, so `manage.py
+    # check` below needs a real database even though it touches no tables.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: epb_test_py_development
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Installs the SDK from end_point_blank_py master, so a breaking SDK
+      # change turns this red here rather than in someone's dev environment.
+      - name: Build against the current SDK
+        run: ./build.sh
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/epb_test_py_development
+
+      # Installing is not enough. The SDK's `versioned` decorator is evaluated at
+      # import, so a removed argument raises TypeError before the app can serve
+      # anything — and `pip install` would have gone green on it. This loads
+      # settings, URLs and every view.
+      #
+      # INTAKE_API_URL points nowhere on purpose: the SDK registers endpoints on
+      # startup and must degrade quietly when intake is unreachable, which is
+      # itself worth asserting.
+      - name: Check the application imports and starts up
+        run: .venv/bin/python manage.py check
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/epb_test_py_development
+          INTAKE_API_URL: http://localhost:9
