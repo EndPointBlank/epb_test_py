@@ -62,12 +62,12 @@ def schools(request):
     return _create_school(request)
 
 
-@versioned(["1"], state="Current")
+@versioned(["1"])
 def _list_schools(request):
     return JsonResponse({"schools": db.list_schools()})
 
 
-@versioned(["1"], state="Current")
+@versioned(["1"])
 def _create_school(request):
     body = json.loads(request.body or b"{}") if request.body else {}
     name = body.get("name", "").strip()
@@ -86,7 +86,7 @@ def school(request, school_id):
     return _delete_school(request, school_id)
 
 
-@versioned(["1"], state="Current")
+@versioned(["1"])
 def _delete_school(request, school_id):
     removed = db.remove_school(school_id)
     if not removed:
@@ -107,12 +107,12 @@ def classes(request):
     return _create_class(request)
 
 
-@versioned(["1"], state="Current")
+@versioned(["1"])
 def _list_classes(request):
     return JsonResponse({"classes": db.list_classes()})
 
 
-@versioned(["1"], state="Current")
+@versioned(["1"])
 def _create_class(request):
     body = json.loads(request.body or b"{}") if request.body else {}
     name = body.get("name", "").strip()
@@ -132,7 +132,7 @@ def single_class(request, class_id):
     return _delete_class(request, class_id)
 
 
-@versioned(["1"], state="Current")
+@versioned(["1"])
 def _delete_class(request, class_id):
     removed = db.remove_class(class_id)
     if not removed:
@@ -151,7 +151,7 @@ def class_students(request, class_id):
     return _add_student(request, class_id)
 
 
-@versioned(["1"], state="Current")
+@versioned(["1"])
 def _add_student(request, class_id):
     body = json.loads(request.body or b"{}") if request.body else {}
     student_id = body.get("student_id")
@@ -171,7 +171,7 @@ def class_student(request, class_id, student_id):
     return _remove_student(request, class_id, student_id)
 
 
-@versioned(["1"], state="Current")
+@versioned(["1"])
 def _remove_student(request, class_id, student_id):
     cls, err = db.remove_student_from_class(class_id, student_id)
     if err:
@@ -190,6 +190,6 @@ def errors(request):
     return _trigger_error(request)
 
 
-@versioned(["1"], state="Current")
+@versioned(["1"])
 def _trigger_error(request):
     raise RuntimeError("This is a test error for error tracking.")
