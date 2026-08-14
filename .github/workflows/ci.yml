@@ -32,9 +32,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      # Installs the SDK from end_point_blank_py master, so a breaking SDK
-      # change turns this red here rather than in someone's dev environment.
-      - name: Build against the current SDK
+      # Installs the SDK at the tag requirements.txt pins, so this job tests
+      # exactly what a deploy would ship. Breakage on the SDK's master is the
+      # `sdk-canary` job's business, not this one's.
+      - name: Build against the pinned SDK
         run: ./build.sh
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/epb_test_py_development
@@ -48,6 +49,56 @@ jobs:
       # startup and must degrade quietly when intake is unreachable, which is
       # itself worth asserting.
       - name: Check the application imports and starts up
+        run: .venv/bin/python manage.py check
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/epb_test_py_development
+          INTAKE_API_URL: http://localhost:9
+
+  # Early warning: install the SDK from master rather than the pinned tag, so a
+  # breaking SDK change shows up here instead of in someone's dev environment.
+  #
+  # Deliberately a separate job, and deliberately allowed to fail. This used to
+  # be a force-reinstall inside build.sh, which meant the SDK master could
+  # decide what a release build shipped -- the pin in requirements.txt was
+  # advisory. Now the pin governs the build and this job only reports.
+  #
+  # A red X here means the SDK's master has moved in a way this app cannot take
+  # yet. It does not block the merge; it tells you the next SDK bump has work in
+  # it.
+  sdk-canary:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: epb_test_py_development
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Build, then override the SDK with master
+        run: |
+          ./build.sh
+          .venv/bin/pip install --upgrade --force-reinstall --no-deps \
+            git+https://github.com/EndPointBlank/end_point_blank_py.git
+          .venv/bin/python -c "import end_point_blank; print('canary SDK', end_point_blank.VERSION)"
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/epb_test_py_development
+
+      - name: Check the application still imports against SDK master
         run: .venv/bin/python manage.py check
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/epb_test_py_development
