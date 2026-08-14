@@ -15,7 +15,13 @@ fi
 python3 -m venv .venv
 .venv/bin/pip install --no-cache-dir -r requirements.txt
 
-# pip skips reinstalling end-point-blank-py when the package version is
-# unchanged, even after the git source moves. Force a fresh clone from master.
-.venv/bin/pip install --upgrade --force-reinstall --no-deps \
-    git+https://github.com/EndPointBlank/end_point_blank_py.git
+# The SDK comes from requirements.txt, which pins an exact tag. There used to
+# be a force-reinstall from master here: requirements.txt tracked the SDK's
+# default branch, and pip skips reinstalling when the version string is
+# unchanged even though the git source moved underneath it.
+#
+# That reinstall named the repo directly with no ref, so it overrode the pin --
+# this script installed master no matter what requirements.txt said, and a
+# deploy could not reproduce a known-good SDK. The early-warning it provided is
+# now the `sdk-canary` job in .github/workflows/ci.yml, which installs from
+# master, is allowed to fail, and does not decide what this build ships.
