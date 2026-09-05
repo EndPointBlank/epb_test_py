@@ -1,0 +1,106 @@
+name: Build and push image
+
+# Builds the arm64 image for epb_test_py and pushes it to ECR on merge to master.
+# Auth is via GitHub OIDC -> the IAM role Terraform creates in the deploy
+# repository at staging/anchor/iam.tf (no static keys).
+#
+# Required repository configuration
+# (Settings -> Secrets and variables -> Actions -> Variables):
+#
+#   AWS_DEPLOY_ROLE_ARN
+#     end_point_blank_deploy: cd staging/anchor && \
+#       terraform output -raw test_app_gha_ecr_push_role_arn
+#
+#   AWS_REGION
+#     us-east-2 -- the anchor's region. These repositories exist in NO other
+#     region, so a wrong value here fails at push with "repository does not
+#     exist" rather than pushing somewhere harmless.
+#
+# THIS IS NOT app_portal's OR intake's ROLE. Those two assume
+# epb-gha-ecr-push from terraform/iam.tf, which trusts only their two
+# repositories and grants push to only their two ECR repositories. Pasting
+# that ARN here fails at AssumeRoleWithWebIdentity -- which is the intended
+# outcome, not a misconfiguration to work around.
+#
+# ############################################################
+# linux/arm64 IS NOT OPTIONAL
+# ############################################################
+#
+# The staging box is Graviton (a t4g.small; staging/terraform/user-data.sh
+# fetches the aarch64 Compose plugin and aarch64 AWS CLI). An amd64 image
+# pushes to ECR perfectly happily and then dies with an exec-format error at
+# `docker compose up` on the box. The platform is declared below rather than
+# inherited from the runner for exactly that reason.
+#
+# ############################################################
+# THE SHA TAG, AND WHY THERE IS NO `latest`
+# ############################################################
+#
+# Only ${{ github.sha }} is pushed. app_portal and intake also push `latest`;
+# staging deliberately refuses it everywhere, because `latest` always
+# resolves to something and a test run pinned to it is not reproducible.
+#
+# That sha is THIS repository's sha. Each of the five epb_test_* repositories
+# tags with its own, so the five tag sets are disjoint and no single sha ever
+# identifies "the test applications" as a set. staging/bin/test-apps.sh takes
+# a tag per app (EPB_TEST_<APP>_IMAGE_TAG) for this reason. Do not build a
+# promotion or pinning tool that assumes one sha spans repositories.
+#
+# ############################################################
+# THIS REPLACES THE HAND BUILD, IT DOES NOT REMOVE IT
+# ############################################################
+#
+# staging/bin/build-test-apps.sh in the deploy repository still builds and
+# pushes all five from a laptop. It is now the local-development path -- for
+# an image of uncommitted work -- and CI is the primary one. An image pushed
+# from a laptop has no provenance beyond an OCI label and can only be rebuilt
+# by the person who built it; one pushed from here is tagged with the commit
+# that produced it.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  id-token: write   # required for OIDC
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      ECR_REPOSITORY: epb_test_py
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push (arm64)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          # Same two labels staging/bin/build-test-apps.sh stamps by hand, so
+          # a CI image and a locally built one are traceable the same way and
+          # `docker inspect` answers "which commit is this" without going
+          # back to the tag.
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
