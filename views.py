@@ -32,8 +32,10 @@ epb.configure(
     base_url=INTAKE_URL,
     app_name="ejb-test-py",
     environment=os.environ.get("DJANGO_ENV", "development"),
-    client_id="Sb3PyThONd8EvPmQnLuTwFc4YjHgNvOq",
-    client_secret="xJ4pQmA7dN3sNkR2tE6bXeJiW0aFzGoBMaVnQkDpEyHwIlZcSxrUfOgtXu9P1J8",
+    # Staging regenerates these via Terraform on every stand-up, so a hardcoded
+    # value can never match there; env must win, literal is the local-dev fallback.
+    client_id=os.environ.get("EPB_CLIENT_ID", "Sb3PyThONd8EvPmQnLuTwFc4YjHgNvOq"),
+    client_secret=os.environ.get("EPB_CLIENT_SECRET", "xJ4pQmA7dN3sNkR2tE6bXeJiW0aFzGoBMaVnQkDpEyHwIlZcSxrUfOgtXu9P1J8"),
     application_version=_git_commit(),
     log_mode=LogMode.DELAYED,
 )
