@@ -24,6 +24,7 @@ import json
 import sys
 import threading
 from unittest import mock
+from urllib.parse import urlsplit
 
 from django.test import SimpleTestCase
 
@@ -99,6 +100,13 @@ class ChainCaller(RecordingCaller):
     ``failure`` (a ``FakeDownstreamResponse`` or an exception) is returned
     instead of re-entering once ``fail_after`` calls have been recorded, which
     is how a refusal deep in the chain is made to happen.
+
+    The re-entry path is taken from the target URL rather than hardcoded, so the
+    double preserves the path exactly as the ring does. Hardcoding ``/mesh/relay``
+    here would re-create, inside the test harness, the very laundering the
+    preserved-path rule exists to prevent: a ``/mesh/reports`` chain would look
+    like it was chaining reports while actually re-entering on relay, and every
+    assertion about it would pass for the wrong reason.
     """
 
     def __init__(self, client, fail_after=None, failure=None) -> None:
@@ -119,7 +127,7 @@ class ChainCaller(RecordingCaller):
         # in `headers` as well makes Django raise about the duplicate.
         forwarded = {k: v for k, v in headers.items() if k.lower() != "content-type"}
         response = self.client.post(
-            "/mesh/relay",
+            urlsplit(target_url).path,
             data=body,
             content_type="application/json",
             headers=forwarded,

@@ -208,7 +208,11 @@ def _trigger_error(request):
 #
 # /mesh/relay is the mesh call, granted to the client organization.
 # /mesh/reports is the negative control -- deliberately not granted, so that a
-# refusal can be observed. When it is reached at all it behaves identically.
+# refusal can be observed. When it is reached at all it behaves identically,
+# INCLUDING forwarding to the next node's /mesh/reports: the path is preserved
+# across hops, so a reports call that should have been refused keeps being
+# refused at every hop instead of turning into ordinary relay traffic one hop
+# in. Each view names its own path; see mesh.handle for why it is not inferred.
 
 
 @csrf_exempt
@@ -220,7 +224,7 @@ def mesh_relay(request):
 
 @versioned(["1"])
 def _mesh_relay(request):
-    return mesh.handle(request)
+    return mesh.handle(request, mesh.RELAY_PATH)
 
 
 @csrf_exempt
@@ -232,4 +236,4 @@ def mesh_reports(request):
 
 @versioned(["1"])
 def _mesh_reports(request):
-    return mesh.handle(request)
+    return mesh.handle(request, mesh.REPORTS_PATH)

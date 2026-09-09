@@ -42,9 +42,22 @@ RUN_HEADER = "X-EPB-Test-Run"
 #: the load driver has to handle. 64 is 12 full laps of a five-node ring.
 MAX_HOPS = 64
 
-#: The mesh call. ``/mesh/reports`` is the negative control and exists to be
-#: refused on the way in; what it forwards is still the mesh call.
+#: The two inbound mesh paths. THE PATH IS PRESERVED ACROSS HOPS: a request that
+#: arrives on ``/mesh/relay`` forwards to the next node's ``/mesh/relay``, and
+#: one that arrives on ``/mesh/reports`` forwards to the next node's
+#: ``/mesh/reports``.
+#:
+#: ``/mesh/reports`` is the negative control -- an API package sc-263
+#: deliberately does not grant -- and this was decided the other way first, on
+#: the reasoning that a call refused at hop one never reaches a downstream path
+#: worth naming. That holds only while provisioning is correct, and the negative
+#: control exists precisely to catch provisioning being wrong. If ``reports`` is
+#: wrongly granted at hop one, forwarding to ``/mesh/relay`` launders a
+#: provisioning error into ordinary successful relay traffic and the run looks
+#: clean; preserving the path keeps it failing, and loud, at every hop. Loud
+#: beats clean-looking. Operator decision, 2026-09-08.
 RELAY_PATH = "/mesh/relay"
+REPORTS_PATH = "/mesh/reports"
 
 CONNECT_TIMEOUT = 3
 READ_TIMEOUT = 10
@@ -174,8 +187,17 @@ class MeshCaller:
 CALLER = MeshCaller()
 
 
-def handle(request) -> JsonResponse:
-    """Serve one mesh request. Shared by ``/mesh/relay`` and ``/mesh/reports``."""
+def handle(request, path: str) -> JsonResponse:
+    """Serve one mesh request. Shared by ``/mesh/relay`` and ``/mesh/reports``.
+
+    :param path: the inbound mesh path, which is also the path this request
+        forwards to. Required rather than defaulted, and stated by the caller
+        rather than read off ``request.path``: a default would silently send a
+        future endpoint's traffic to ``/mesh/relay`` -- the exact laundering
+        this contract was amended to prevent -- and ``request.path`` carries
+        whatever the WSGI layer reported, mount prefix and trailing slash
+        included.
+    """
     hops_received = parse_hops(request.headers.get(HOPS_HEADER))
     run = request.headers.get(RUN_HEADER)
     payload = _payload(request)
@@ -194,7 +216,7 @@ def handle(request) -> JsonResponse:
         )
 
     try:
-        downstream = _forward(hops_received - 1, run, payload)
+        downstream = _forward(hops_received - 1, run, payload, path)
     except DownstreamNotConfigured as exc:
         # Loud, and distinguishable from a termination. A silent stop here would
         # make a broken mesh look like a working one that simply ran out of
@@ -255,10 +277,11 @@ def _payload(request):
     return body.get("payload")
 
 
-def _forward(hops: int, run: str | None, payload):
+def _forward(hops: int, run: str | None, payload, path: str):
     """Make the one downstream call and return its body verbatim.
 
     :param hops: the already-decremented budget to hand on.
+    :param path: the inbound path, preserved onto the next node.
     """
     base = downstream_base_url()
     if base is None:
@@ -267,7 +290,7 @@ def _forward(hops: int, run: str | None, payload):
             f"the downstream call the request still has budget for (forwarding {hops})"
         )
 
-    target = base.rstrip("/") + RELAY_PATH
+    target = base.rstrip("/") + path
 
     headers = {"Content-Type": "application/json", HOPS_HEADER: str(hops)}
     if run is not None:

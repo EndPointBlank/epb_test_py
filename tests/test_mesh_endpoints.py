@@ -434,7 +434,7 @@ class WireFormatTest(MeshTestCase):
             "https://epb-test-rails.staging.example.invalid/mesh/relay",
         )
 
-    def test_reports_relays_exactly_like_relay(self):
+    def test_reports_behaves_like_relay_except_that_it_keeps_its_own_path(self):
         caller = self.install(RecordingCaller())
         self.downstream_url()
 
@@ -445,9 +445,93 @@ class WireFormatTest(MeshTestCase):
         self.assertEqual(body["hops_forwarded"], 1)
         self.assertFalse(body["terminated"])
         self.assertIsNotNone(body["downstream"])
-        # The mesh call is /mesh/relay; the negative control exists to be
-        # refused on the way in, not to propagate itself onward.
-        self.assertTrue(caller.calls[0]["url"].endswith("/mesh/relay"))
+        # The budget, the body and the wire format are identical to relay's.
+        # The path is not: it is preserved onto the next node. See
+        # NegativeControlPathTest for why.
+        self.assertTrue(caller.calls[0]["url"].endswith("/mesh/reports"))
+
+
+class NegativeControlPathTest(MeshTestCase):
+    """The path is preserved across hops, and the negative control is why.
+
+    ``/mesh/reports`` is the ``reports`` API package, which sc-263 deliberately
+    does NOT grant: a call to it must be refused. Forwarding it to the next
+    node's ``/mesh/relay`` was the first decision, on the reasoning that a call
+    refused at hop one never reaches a downstream path worth naming.
+
+    That reasoning holds only while provisioning is correct -- and catching
+    provisioning being wrong is the entire job of a negative control. If
+    ``reports`` is wrongly granted at hop one, forwarding to ``/mesh/relay``
+    turns a provisioning error into ordinary successful relay traffic and the
+    load run reports clean numbers for a mesh that is misconfigured. Preserving
+    the path keeps it failing at every hop. Loud beats clean-looking.
+    """
+
+    def test_reports_forwards_to_the_downstream_reports_path(self):
+        caller = self.install(RecordingCaller())
+        self.downstream_url("https://epb-test-rails.staging.example.invalid/")
+
+        self.relay(hops="1", path="/mesh/reports")
+
+        self.assertEqual(
+            caller.calls[0]["url"],
+            "https://epb-test-rails.staging.example.invalid/mesh/reports",
+        )
+
+    def test_reports_keeps_its_path_at_every_hop(self):
+        caller = self.install(ChainCaller(self.client))
+        self.downstream_url()
+
+        response = self.relay(hops="3", path="/mesh/reports")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(caller.calls), 3)
+        for call in caller.calls:
+            self.assertTrue(
+                call["url"].endswith("/mesh/reports"),
+                f"{call['url']} stopped being the negative control",
+            )
+        # And every hop was authorized as reports, not as relay: the refusal
+        # this endpoint exists to produce has to be asked for at each node.
+        paths = [call.args[1] for call in self.authorize.call_args_list]
+        self.assertEqual(paths, ["/mesh/reports"] * 4)
+
+    def test_a_wrongly_granted_reports_call_keeps_failing_downstream(self):
+        # The regression this rule exists for. Hop one wrongly grants reports
+        # (the entry request succeeds); the rest of the ring is provisioned
+        # correctly and refuses it. Forwarding to relay would have answered 200
+        # here and the misprovisioning would never have been visible.
+        def next_node(target_url, headers, body):
+            if target_url.endswith("/mesh/reports"):
+                return FakeDownstreamResponse(
+                    403, json.dumps({"error": "Authorization failed: not granted"})
+                )
+            return RecordingCaller._default_response(target_url, headers, body)
+
+        caller = self.install(RecordingCaller(responder=next_node))
+        self.downstream_url()
+
+        response = self.relay(hops="2", path="/mesh/reports")
+
+        self.assertEqual(response.status_code, 502)
+        body = response.json()
+        self.assertEqual(body["error"], "downstream_failed")
+        self.assertEqual(body["downstream_status"], 403)
+        self.assertIn("not granted", body["downstream_error"])
+        self.assertTrue(caller.calls[0]["url"].endswith("/mesh/reports"))
+
+    def test_relay_is_unaffected_and_never_forwards_to_reports(self):
+        caller = self.install(ChainCaller(self.client))
+        self.downstream_url()
+
+        response = self.relay(hops="3")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(caller.calls), 3)
+        for call in caller.calls:
+            self.assertTrue(call["url"].endswith("/mesh/relay"))
+        paths = [call.args[1] for call in self.authorize.call_args_list]
+        self.assertEqual(paths, ["/mesh/relay"] * 4)
 
 
 class CallerSeamTest(MeshTestCase):
