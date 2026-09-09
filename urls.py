@@ -10,4 +10,6 @@ urlpatterns = [
     path("classes/<int:class_id>/students", views.class_students),
     path("classes/<int:class_id>/students/<int:student_id>", views.class_student),
     path("errors", views.errors),
+    path("mesh/relay", views.mesh_relay),
+    path("mesh/reports", views.mesh_reports),
 ]

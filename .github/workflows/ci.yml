@@ -54,6 +54,13 @@ jobs:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/epb_test_py_development
           INTAKE_API_URL: http://localhost:9
 
+      # The suite is required to need nothing outside this process -- see the
+      # hop-budget contract's definition of done -- so no DATABASE_URL and no
+      # INTAKE_API_URL are given here. If a test ever starts needing one, this
+      # step goes red rather than the requirement quietly lapsing.
+      - name: Run the test suite
+        run: .venv/bin/python manage.py test tests
+
   # Early warning: install the SDK from master rather than the pinned tag, so a
   # breaking SDK change shows up here instead of in someone's dev environment.
   #
