@@ -21,6 +21,8 @@ depending on a developer's local intake being up.
 from __future__ import annotations
 
 import json
+import sys
+import threading
 from unittest import mock
 
 from django.test import SimpleTestCase
@@ -180,6 +182,35 @@ class MeshTestCase(SimpleTestCase):
         import os
 
         os.environ.pop("EPB_MESH_DOWNSTREAM_URL", None)
+
+    def assertNoStackOverflow(self, call):
+        """Run *call* on a thread with a deep stack, and return its result.
+
+        A 64-hop chain re-entered in-process needs far more Python frames than
+        the default recursion limit allows, and raising the limit alone can put
+        CPython through the C stack instead. A dedicated thread gets both a
+        generous recursion limit and a stack to match.
+        """
+        outcome = {}
+
+        def run():
+            sys.setrecursionlimit(50_000)
+            try:
+                outcome["value"] = call()
+            except BaseException as exc:  # re-raised on the calling thread
+                outcome["error"] = exc
+
+        previous = threading.stack_size(64 * 1024 * 1024)
+        try:
+            thread = threading.Thread(target=run)
+            thread.start()
+            thread.join()
+        finally:
+            threading.stack_size(previous)
+
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome["value"]
 
     def relay(self, hops=None, run=None, body=None, path="/mesh/relay"):
         headers = {}

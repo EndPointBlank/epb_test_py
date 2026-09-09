@@ -9,7 +9,6 @@ real deployment points at the network.
 from __future__ import annotations
 
 import json
-import sys
 from unittest import mock
 
 import requests
@@ -148,15 +147,13 @@ class TerminationTest(MeshTestCase):
         caller = self.install(ChainCaller(self.client))
         self.downstream_url()
 
-        # In the real ring each hop is a separate process; here all 64 are
-        # stacked inside one Python interpreter, which exhausts the default
-        # recursion limit at around 38 of them. The limit is an artifact of
-        # proving this offline, not of the contract.
-        limit = sys.getrecursionlimit()
-        sys.setrecursionlimit(20_000)
-        self.addCleanup(sys.setrecursionlimit, limit)
-
-        response = self.relay(hops="1000000")
+        # In the real ring each hop is its own process; here all 64 are stacked
+        # inside one interpreter, which exhausts the default recursion limit at
+        # around 38 of them. Raising the limit alone risks the C stack on some
+        # CPython versions, so the chain runs on a thread with a stack big
+        # enough to hold it. Both are artifacts of proving this offline, not of
+        # the contract.
+        response = self.assertNoStackOverflow(lambda: self.relay(hops="1000000"))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(caller.calls), 64)
