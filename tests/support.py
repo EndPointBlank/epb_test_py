@@ -137,6 +137,38 @@ class ChainCaller(RecordingCaller):
         )
 
 
+class NamingChainCaller(ChainCaller):
+    """A :class:`ChainCaller` that gives every hop of the chain its own name.
+
+    Re-entering the same application is what makes the chain provable offline,
+    but it also makes every hop answer ``app: "epb_test_py"`` -- so an ``origin``
+    that named the wrong hop would be indistinguishable from one that named the
+    right one, and the non-overwrite rule could not be tested by name at all.
+
+    ``EPB_MESH_APP_NAME`` is read per request (``mesh.app_name``), and the chain
+    is strictly sequential and synchronous: hop *k* is entirely inside hop
+    *k-1*'s call. Setting the variable around the re-entry therefore gives hop
+    *k* the name ``f"{prefix}{k}"`` and restores the caller's name on the way
+    back out, LIFO. The entry hop keeps whatever name the test set for it.
+    """
+
+    def __init__(self, client, prefix, **kwargs) -> None:
+        super().__init__(client, **kwargs)
+        self.prefix = prefix
+
+    def name_for(self, hop: int) -> str:
+        return f"{self.prefix}{hop}"
+
+    def post(self, target_url, headers, body):
+        # ``self.calls`` has one entry per call already made, so the hop about
+        # to be entered is the next one down.
+        hop = len(self.calls) + 1
+        with mock.patch.dict(
+            "os.environ", {"EPB_MESH_APP_NAME": self.name_for(hop)}
+        ):
+            return super().post(target_url, headers, body)
+
+
 class MeshTestCase(SimpleTestCase):
     """Base case: intake doubled, SDK writers silenced, network booby-trapped."""
 

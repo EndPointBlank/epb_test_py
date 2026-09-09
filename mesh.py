@@ -14,6 +14,15 @@ nobody, ``n > 0`` makes exactly one downstream call carrying ``n - 1``. One
 entry request with budget N touches N+1 applications, and load becomes a
 function of entry rate and N alone.
 
+WHO REFUSED, AS OPPOSED TO WHO ANSWERED
+---------------------------------------
+``downstream_status`` is per-hop by design, so a refusal deep in the ring
+surfaces at the entry point as a 502 from the neighbour and the original status
+only rides up nested inside ``downstream_error`` -- where :data:`ERROR_LIMIT`
+truncates it away past about three hops. A failure response therefore also
+carries an ``origin`` object, minted once by the hop that observed the failure
+and forwarded verbatim by every hop above it (sc-290).
+
 WHY THIS LIVES HERE AND NOT IN THE SDK
 --------------------------------------
 This is harness behaviour. It must never be pushed down into
@@ -62,8 +71,21 @@ REPORTS_PATH = "/mesh/reports"
 CONNECT_TIMEOUT = 3
 READ_TIMEOUT = 10
 
-#: The contract's cap on ``downstream_error``.
+#: The contract's cap on ``downstream_error``. This is the truncation that made
+#: ``origin`` necessary: ``downstream_status`` is per-hop, so the originally
+#: refused status only rides up nested inside ``downstream_error`` -- and each
+#: hop re-truncates that nesting to 500 characters against roughly 110
+#: characters of envelope per level. Measured here on 2026-09-09: the original
+#: status is still readable about three hops from the entry point and is gone at
+#: four or more. In a five-node ring with budget 4 the refusals lost are exactly
+#: the ones on the far side.
 ERROR_LIMIT = 500
+
+#: The contract's cap on ``origin.error``. Deliberately far below
+#: :data:`ERROR_LIMIT` and never nested: the whole point of ``origin`` is to
+#: survive the truncation above, and a reason that could itself carry a nested
+#: envelope would re-create the problem inside the field that exists to fix it.
+ORIGIN_ERROR_LIMIT = 200
 
 # ASCII whitespace, spelled out. ``str.strip()`` with no argument also eats
 # U+00A0 and the rest of the Unicode space characters, and WSGI header values
@@ -83,12 +105,24 @@ class DownstreamNotConfigured(Exception):
 
 
 class DownstreamFailed(Exception):
-    """The next node could not be reached, or refused, or answered rubbish."""
+    """The next node could not be reached, or refused, or answered rubbish.
 
-    def __init__(self, message: str, status: int | None = None) -> None:
+    :param origin: the ``origin`` object the failing downstream body already
+        carried, if it carried one. ``None`` means this application is the
+        observer of the original failure and must mint the object itself -- see
+        :func:`handle`.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status: int | None = None,
+        origin: dict | None = None,
+    ) -> None:
         super().__init__(message)
         self.message = message
         self.status = status
+        self.origin = origin
 
 
 def parse_hops(raw: str | None) -> int:
@@ -235,16 +269,50 @@ def handle(request, path: str) -> JsonResponse:
     except DownstreamFailed as exc:
         # Never swallowed into a 200: the negative control depends on a refusal
         # being visible from the entry point.
+        #
+        # SET ONCE, BY THE OBSERVER; FORWARDED VERBATIM BY EVERYONE ABOVE. If
+        # the failing downstream body already carried an ``origin``, that one is
+        # the deeper failure and this hop MUST NOT replace it with its own.
+        # Overwriting here is the single most likely way to get this feature
+        # wrong, and it fails silently: every response still has an ``origin``,
+        # it just names the wrong application. sc-265 would then attribute every
+        # refusal in the ring to whichever node it happened to enter at.
+        origin = exc.origin
+        if origin is None:
+            origin = {
+                # The observer, not the refuser: this application is the only
+                # participant that reliably knows both the status it got back
+                # and its own identity.
+                "app": app_name(),
+                # None for a transport failure, a timeout, or a refusal raised
+                # before the request left.
+                "status": exc.status,
+                # The observer's OWN budget, which lets the entry point derive
+                # depth as `entry_budget - origin.hops_received` without any hop
+                # having to know the entry budget.
+                "hops_received": hops_received,
+                "error": _short_reason(exc.message),
+            }
+
         logger.error(
-            "Mesh relay downstream failed (status=%s): %s", exc.status, exc.message
+            "Mesh relay downstream failed (status=%s, origin=%s status=%s): %s",
+            exc.status,
+            origin.get("app"),
+            origin.get("status"),
+            exc.message,
         )
         return JsonResponse(
             {
                 "app": app_name(),
                 "hops_received": hops_received,
                 "error": "downstream_failed",
+                # Unchanged, and still per-hop: the status of the node THIS
+                # application called. A refusal next door stays distinguishable
+                # from one far away. ``origin`` answers "who refused"; these two
+                # answer "what did my own neighbour do".
                 "downstream_status": exc.status,
                 "downstream_error": exc.message[:ERROR_LIMIT],
+                "origin": origin,
             },
             status=502,
         )
@@ -275,6 +343,53 @@ def _payload(request):
     if not isinstance(body, dict):
         return None
     return body.get("payload")
+
+
+def _origin_in(text: str) -> dict | None:
+    """The ``origin`` a downstream failure body already carries, or ``None``.
+
+    Deeper is truer: whatever comes back here was minted by a hop closer to the
+    original failure than this one, so it is forwarded byte for byte rather than
+    re-derived. Anything that is not a JSON object with an object ``origin`` --
+    a proxy's HTML, a plain 403 from the authorization layer, a node that
+    predates this field -- answers ``None``, and this application becomes the
+    observer instead.
+    """
+    try:
+        body = json.loads(text)
+    except (ValueError, TypeError):
+        return None
+
+    if not isinstance(body, dict):
+        return None
+
+    origin = body.get("origin")
+    return origin if isinstance(origin, dict) else None
+
+
+def _short_reason(message: str) -> str:
+    """A bounded, non-nested reason for ``origin.error``.
+
+    A failure body is usually ``{"error": "..."}`` -- the authorization layer's
+    refusal, or a downstream node's own error name -- and that string is the
+    reason worth keeping. Everything else falls back to the raw message. Either
+    way it is cut to :data:`ORIGIN_ERROR_LIMIT`, because a field defined to
+    survive truncation must not be able to be truncated into uselessness by the
+    next hop.
+    """
+    try:
+        body = json.loads(message)
+    except (ValueError, TypeError):
+        body = None
+
+    if isinstance(body, dict):
+        for key in ("error", "message"):
+            value = body.get(key)
+            if isinstance(value, str) and value:
+                message = value
+                break
+
+    return message[:ORIGIN_ERROR_LIMIT]
 
 
 def _forward(hops: int, run: str | None, payload, path: str):
@@ -312,7 +427,9 @@ def _forward(hops: int, run: str | None, payload, path: str):
     text = getattr(response, "text", "") or ""
 
     if status != 200:
-        raise DownstreamFailed(text, status=status)
+        # If the refusal happened deeper than the node just called, its body
+        # carries the origin of it. Carried up untouched.
+        raise DownstreamFailed(text, status=status, origin=_origin_in(text))
 
     try:
         return json.loads(text)

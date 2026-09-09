@@ -18,6 +18,7 @@ from tests.support import (
     ChainCaller,
     FakeDownstreamResponse,
     MeshTestCase,
+    NamingChainCaller,
     RecordingCaller,
     depth,
 )
@@ -532,6 +533,432 @@ class NegativeControlPathTest(MeshTestCase):
             self.assertTrue(call["url"].endswith("/mesh/relay"))
         paths = [call.args[1] for call in self.authorize.call_args_list]
         self.assertEqual(paths, ["/mesh/relay"] * 4)
+
+
+class OriginTest(MeshTestCase):
+    """``origin``: who refused, recoverable at the entry point (sc-290).
+
+    ``downstream_status`` is per-hop, so the originally refused status only
+    rides up nested inside ``downstream_error`` -- and ``mesh.ERROR_LIMIT``
+    truncates that nesting away at about four hops. ``origin`` is minted once,
+    by the hop whose own downstream call failed, and forwarded verbatim by every
+    hop above it.
+
+    THE RULE MOST LIKELY TO BE GOT WRONG is the non-overwrite. A hop that
+    replaces a received ``origin`` with its own still returns a well-formed
+    response carrying a well-formed ``origin``; it just names the wrong
+    application, and sc-265 would attribute every refusal in the ring to
+    whichever node the load driver happened to enter at. There is no error to
+    notice, so it is asserted directly and from several directions below.
+    """
+
+    REFUSAL = json.dumps({"error": "Authorization failed: not granted"})
+
+    def refusing_caller(self, status=403, text=None):
+        caller = self.install(
+            RecordingCaller(
+                responder=lambda *_: FakeDownstreamResponse(
+                    status, self.REFUSAL if text is None else text
+                )
+            )
+        )
+        self.downstream_url()
+        return caller
+
+    # -- the observer mints it -------------------------------------------
+
+    def test_the_hop_whose_downstream_failed_sets_origin(self):
+        self.refusing_caller()
+
+        body = self.relay(hops="3").json()
+
+        self.assertEqual(
+            body["origin"],
+            {
+                "app": "epb_test_py",
+                "status": 403,
+                "hops_received": 3,
+                "error": "Authorization failed: not granted",
+            },
+        )
+
+    def test_origin_names_the_observer_not_the_refuser(self):
+        # The refuser's own name is not in the response it sent, and inventing
+        # one would be a guess. The observing hop is the only participant that
+        # knows both the status it received and its own identity.
+        self.refusing_caller()
+        with mock.patch.dict("os.environ", {"EPB_MESH_APP_NAME": "epb_test_py_west"}):
+            body = self.relay(hops="2").json()
+
+        self.assertEqual(body["origin"]["app"], "epb_test_py_west")
+
+    def test_origin_hops_received_is_the_observers_own_budget(self):
+        # So the entry point derives depth as entry_budget - origin.hops_received
+        # without any hop having to know the entry budget.
+        self.refusing_caller()
+
+        self.assertEqual(self.relay(hops="5").json()["origin"]["hops_received"], 5)
+
+    def test_a_clamped_budget_reports_the_clamped_value_in_origin(self):
+        self.refusing_caller()
+
+        body = self.relay(hops="1000000").json()
+
+        self.assertEqual(body["hops_received"], 64)
+        self.assertEqual(body["origin"]["hops_received"], 64)
+
+    def test_a_non_json_two_hundred_keeps_its_status_in_origin(self):
+        self.refusing_caller(status=200, text="<html>proxy</html>")
+
+        body = self.relay(hops="1").json()
+
+        self.assertEqual(body["origin"]["status"], 200)
+        self.assertEqual(body["origin"]["app"], "epb_test_py")
+
+    # -- the non-overwrite rule ------------------------------------------
+
+    def deep_origin(self, **overrides):
+        origin = {
+            "app": "epb_test_rails",
+            "status": 403,
+            "hops_received": 1,
+            "error": "access_denied",
+        }
+        origin.update(overrides)
+        return origin
+
+    def failure_body_carrying(self, origin):
+        """What a hop below answers when the refusal happened below IT."""
+        return json.dumps(
+            {
+                "app": "epb_test_js",
+                "hops_received": 2,
+                "error": "downstream_failed",
+                "downstream_status": 502,
+                "downstream_error": "...the nested walk, which truncates...",
+                "origin": origin,
+            }
+        )
+
+    def test_a_received_origin_is_forwarded_unchanged(self):
+        origin = self.deep_origin()
+        self.refusing_caller(status=502, text=self.failure_body_carrying(origin))
+
+        body = self.relay(hops="4").json()
+
+        self.assertEqual(body["origin"], origin)
+
+    def test_a_hop_does_not_substitute_its_own_origin(self):
+        # The failure mode this rule exists for, stated the other way round:
+        # every field of the received object must survive, not just the object.
+        self.refusing_caller(status=502, text=self.failure_body_carrying(self.deep_origin()))
+
+        body = self.relay(hops="4").json()
+
+        self.assertEqual(body["app"], "epb_test_py")
+        self.assertNotEqual(body["origin"]["app"], body["app"])
+        self.assertEqual(body["origin"]["status"], 403)
+        self.assertNotEqual(body["origin"]["status"], body["downstream_status"])
+        self.assertEqual(body["origin"]["hops_received"], 1)
+        self.assertNotEqual(body["origin"]["hops_received"], body["hops_received"])
+        self.assertEqual(body["origin"]["error"], "access_denied")
+
+    def test_a_received_null_status_is_not_repaired(self):
+        # A transport failure deeper down is a real answer to "who refused", and
+        # `origin = received or mine` -- the obvious one-liner -- would keep it
+        # only by accident. A null status must not tempt a hop into replacing
+        # the object with its own, which has a status and would look better.
+        origin = self.deep_origin(status=None, error="ConnectionError: refused")
+        self.refusing_caller(status=502, text=self.failure_body_carrying(origin))
+
+        body = self.relay(hops="3").json()
+
+        self.assertEqual(body["origin"], origin)
+        self.assertIsNone(body["origin"]["status"])
+        self.assertEqual(body["downstream_status"], 502)
+
+    def test_an_empty_received_origin_is_still_not_overwritten(self):
+        # `exc.origin or {...}` passes every test above and fails this one: an
+        # empty object is falsy, so the fallback fires and this hop's name is
+        # published as the origin of a failure it did not observe.
+        self.refusing_caller(status=502, text=self.failure_body_carrying({}))
+
+        self.assertEqual(self.relay(hops="3").json()["origin"], {})
+
+    def test_an_origin_that_is_not_an_object_is_ignored(self):
+        # A node that answers `"origin": "epb_test_rails"` is not speaking this
+        # contract, and forwarding a string would hand sc-265 something it
+        # cannot read. This hop is the observer instead.
+        self.refusing_caller(
+            status=502, text=self.failure_body_carrying("epb_test_rails")
+        )
+
+        origin = self.relay(hops="3").json()["origin"]
+
+        self.assertEqual(origin["app"], "epb_test_py")
+        self.assertEqual(origin["status"], 502)
+
+    def test_a_downstream_that_carries_no_origin_makes_this_hop_the_observer(self):
+        # Every hop below this one predates sc-290, or the refusal came from the
+        # authorization layer, which knows nothing about it.
+        self.refusing_caller(status=502, text=json.dumps({"error": "downstream_failed"}))
+
+        origin = self.relay(hops="3").json()["origin"]
+
+        self.assertEqual(origin["app"], "epb_test_py")
+        self.assertEqual(origin["status"], 502)
+
+    # -- through a real chain --------------------------------------------
+
+    def test_the_deepest_hop_owns_the_origin_through_a_real_chain(self):
+        # Four hops, each answering under its own name, and the LAST one is the
+        # one whose downstream refuses. Re-entering this same application is
+        # what makes the chain provable with no mesh; the per-hop name is what
+        # makes "the deep app, not an intermediate one" assertable at all.
+        caller = self.install(
+            NamingChainCaller(
+                self.client,
+                prefix="epb_test_py_hop",
+                fail_after=3,
+                failure=FakeDownstreamResponse(403, self.REFUSAL),
+            )
+        )
+        self.downstream_url()
+
+        with mock.patch.dict("os.environ", {"EPB_MESH_APP_NAME": "epb_test_py_hop0"}):
+            response = self.relay(hops="4")
+
+        self.assertEqual(response.status_code, 502)
+        body = response.json()
+        self.assertEqual(len(caller.calls), 4)
+
+        self.assertEqual(body["app"], "epb_test_py_hop0")
+        self.assertEqual(body["origin"]["app"], "epb_test_py_hop3")
+        self.assertEqual(body["origin"]["status"], 403)
+        self.assertEqual(body["origin"]["hops_received"], 1)
+        # Depth, derived at the entry point without any hop knowing the entry
+        # budget: 4 - 1 == three hops down.
+        self.assertEqual(4 - body["origin"]["hops_received"], 3)
+
+    def test_downstream_status_stays_per_hop_while_origin_names_the_far_end(self):
+        # origin does not replace downstream_status; both meanings coexist. The
+        # entry point sees a 502 next door AND a 403 three hops away, and a 403
+        # next door stays distinguishable from one far away.
+        self.install(
+            NamingChainCaller(
+                self.client,
+                prefix="epb_test_py_hop",
+                fail_after=3,
+                failure=FakeDownstreamResponse(403, self.REFUSAL),
+            )
+        )
+        self.downstream_url()
+
+        body = self.relay(hops="4").json()
+
+        self.assertEqual(body["downstream_status"], 502)
+        self.assertEqual(body["origin"]["status"], 403)
+        # And at this depth the walk origin replaced has already stopped
+        # working: 500 characters of nested envelope, cut mid-string.
+        self.assertEqual(len(body["downstream_error"]), mesh.ERROR_LIMIT)
+        with self.assertRaises(ValueError):
+            json.loads(body["downstream_error"])
+
+    def test_the_hop_next_door_agrees_about_the_origin(self):
+        # Two hops, shallow enough that the nested body still parses -- so the
+        # forwarded object can be compared with the one the observer minted.
+        self.install(
+            NamingChainCaller(
+                self.client,
+                prefix="epb_test_py_hop",
+                fail_after=1,
+                failure=FakeDownstreamResponse(403, self.REFUSAL),
+            )
+        )
+        self.downstream_url()
+
+        body = self.relay(hops="2").json()
+
+        neighbour = json.loads(body["downstream_error"])
+        self.assertEqual(neighbour["app"], "epb_test_py_hop1")
+        self.assertEqual(neighbour["downstream_status"], 403)
+        self.assertEqual(neighbour["origin"], body["origin"])
+        self.assertEqual(body["origin"]["app"], "epb_test_py_hop1")
+
+    def test_origin_survives_a_chain_the_nested_walk_does_not(self):
+        # THE MEASUREMENT THIS FIELD EXISTS FOR. 64 hops (the clamp), refused at
+        # the deepest one. The nested downstream_error is re-truncated to 500
+        # characters at every level, so the refusal is unrecoverable from it;
+        # origin is at the top of the entry response either way.
+        #
+        # 64 hops stacked inside one interpreter needs far more frames than the
+        # default recursion limit, hence the deep-stack thread. Both are
+        # artifacts of proving this offline, not of the contract.
+        marker = "REFUSED-BY-THE-FAR-SIDE"
+        caller = self.install(
+            NamingChainCaller(
+                self.client,
+                prefix="epb_test_py_hop",
+                fail_after=63,
+                failure=FakeDownstreamResponse(
+                    403, json.dumps({"error": f"access_denied {marker}"})
+                ),
+            )
+        )
+        self.downstream_url()
+
+        response = self.assertNoStackOverflow(lambda: self.relay(hops="1000000"))
+
+        self.assertEqual(response.status_code, 502)
+        body = response.json()
+        self.assertEqual(len(caller.calls), 64)
+
+        self.assertEqual(body["origin"]["app"], "epb_test_py_hop63")
+        self.assertEqual(body["origin"]["status"], 403)
+        self.assertEqual(body["origin"]["hops_received"], 1)
+        self.assertIn(marker, body["origin"]["error"])
+
+        # And the walk this replaced: the far end is not in there at all.
+        self.assertEqual(len(body["downstream_error"]), mesh.ERROR_LIMIT)
+        self.assertNotIn(marker, body["downstream_error"])
+        self.assertNotIn("403", body["downstream_error"])
+
+    # -- failures that are not an HTTP status -----------------------------
+
+    def test_a_transport_failure_has_a_null_origin_status(self):
+        for label, error in (
+            ("connection", requests.ConnectionError("Connection refused")),
+            ("timeout", requests.Timeout("Read timed out")),
+        ):
+            with self.subTest(case=label):
+
+                def explode(*_, _error=error):
+                    raise _error
+
+                self.install(RecordingCaller(responder=explode))
+                self.downstream_url()
+
+                body = self.relay(hops="2").json()
+
+                self.assertEqual(body["origin"]["app"], "epb_test_py")
+                self.assertIsNone(body["origin"]["status"])
+                self.assertEqual(body["origin"]["hops_received"], 2)
+                self.assertIn(str(error), body["origin"]["error"])
+
+    def test_a_refusal_before_the_request_leaves_has_a_null_origin_status(self):
+        # No token, so nothing was sent and there is no status to report -- but
+        # it is still a refusal by the authorization layer, and sc-265 counts it.
+        # The real seam is kept for authorization_header (RecordingCaller stubs
+        # it, which would make the credential succeed and prove nothing).
+        class NoCredential(mesh.MeshCaller):
+            def post(self, *args):
+                raise AssertionError("must not post without a credential")
+
+        self.install(NoCredential())
+        self.downstream_url()
+
+        with mock.patch(
+            "end_point_blank.tokens.access_tokens.AccessTokens.token",
+            return_value=None,
+        ):
+            body = self.relay(hops="1").json()
+
+        self.assertIsNone(body["origin"]["status"])
+        self.assertEqual(body["origin"]["app"], "epb_test_py")
+        self.assertIn("no access token", body["origin"]["error"])
+
+    # -- the cap ----------------------------------------------------------
+
+    def test_the_origin_error_is_capped_at_two_hundred_characters(self):
+        self.refusing_caller(text=json.dumps({"error": "x" * 5000}))
+
+        body = self.relay(hops="1").json()
+
+        self.assertEqual(len(body["origin"]["error"]), mesh.ORIGIN_ERROR_LIMIT)
+        self.assertEqual(mesh.ORIGIN_ERROR_LIMIT, 200)
+        # And the per-hop field keeps its own, larger cap.
+        self.assertEqual(len(body["downstream_error"]), mesh.ERROR_LIMIT)
+
+    def test_a_long_non_json_reason_is_capped_too(self):
+        self.refusing_caller(text="y" * 5000)
+
+        self.assertEqual(
+            len(self.relay(hops="1").json()["origin"]["error"]),
+            mesh.ORIGIN_ERROR_LIMIT,
+        )
+
+    def test_the_origin_error_is_never_a_nested_envelope(self):
+        # The truncation origin exists to fix must not reappear inside it: the
+        # reason is the downstream's own error string, not its whole body.
+        self.refusing_caller(
+            status=502,
+            text=json.dumps(
+                {
+                    "app": "epb_test_js",
+                    "error": "downstream_failed",
+                    "downstream_error": "z" * 400,
+                }
+            ),
+        )
+
+        error = self.relay(hops="1").json()["origin"]["error"]
+
+        self.assertEqual(error, "downstream_failed")
+        self.assertNotIn("z", error)
+
+    # -- nothing else changed ---------------------------------------------
+
+    def test_a_successful_chain_carries_no_origin(self):
+        self.install(ChainCaller(self.client))
+        self.downstream_url()
+
+        body = self.relay(hops="3").json()
+
+        self.assertEqual(depth(body), 3)
+        while body is not None:
+            self.assertNotIn("origin", body)
+            body = body["downstream"]
+
+    def test_a_terminated_request_carries_no_origin(self):
+        self.install(RecordingCaller())
+        self.downstream_url()
+
+        body = self.relay(hops="0").json()
+
+        self.assertTrue(body["terminated"])
+        self.assertNotIn("origin", body)
+
+    def test_the_unconfigured_five_hundred_carries_no_origin(self):
+        # Nothing was called, so nothing observed a refusal. The contract states
+        # this body exactly -- app, hops_received, error, message -- and it must
+        # stay exactly that, so it can never be misread as either an exhausted
+        # budget or a refusal somewhere in the ring.
+        self.install(RecordingCaller())
+        self.no_downstream_url()
+
+        response = self.relay(hops="3")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(
+            set(response.json()),
+            {"app", "hops_received", "error", "message"},
+        )
+
+    def test_the_failure_body_keeps_every_field_it_had(self):
+        # origin adds a field and removes nothing.
+        self.refusing_caller()
+
+        self.assertEqual(
+            set(self.relay(hops="3").json()),
+            {
+                "app",
+                "hops_received",
+                "error",
+                "downstream_status",
+                "downstream_error",
+                "origin",
+            },
+        )
 
 
 class CallerSeamTest(MeshTestCase):
