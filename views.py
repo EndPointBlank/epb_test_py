@@ -12,6 +12,7 @@ from end_point_blank.django import authorized
 from end_point_blank.django.versioned import versioned
 
 import db
+import mesh
 
 # ---------------------------------------------------------------------------
 # Configure EndPointBlank
@@ -195,3 +196,40 @@ def errors(request):
 @versioned(["1"])
 def _trigger_error(request):
     raise RuntimeError("This is a test error for error tracking.")
+
+
+# ---------------------------------------------------------------------------
+# Mesh (the hop-budget contract, sc-264)
+# ---------------------------------------------------------------------------
+#
+# Both endpoints sit behind @authorized exactly like the demo CRUD routes:
+# exercising cross-organization authorization is the whole point of the mesh,
+# and an unprotected relay would prove nothing.
+#
+# /mesh/relay is the mesh call, granted to the client organization.
+# /mesh/reports is the negative control -- deliberately not granted, so that a
+# refusal can be observed. When it is reached at all it behaves identically.
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@authorized
+def mesh_relay(request):
+    return _mesh_relay(request)
+
+
+@versioned(["1"])
+def _mesh_relay(request):
+    return mesh.handle(request)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@authorized
+def mesh_reports(request):
+    return _mesh_reports(request)
+
+
+@versioned(["1"])
+def _mesh_reports(request):
+    return mesh.handle(request)
