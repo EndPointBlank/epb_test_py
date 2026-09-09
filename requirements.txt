@@ -1,4 +1,4 @@
 django>=5.0
 waitress>=3.0
 psycopg2-binary>=2.9
-end-point-blank-py @ git+https://github.com/EndPointBlank/end_point_blank_py.git@v0.6.0
+end-point-blank-py @ git+https://github.com/EndPointBlank/end_point_blank_py.git@a0599f512d326fa3c33866b82ba33613035b80e5
