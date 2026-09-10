@@ -8,7 +8,7 @@ from django.views.decorators.http import require_http_methods
 
 import end_point_blank as epb
 from end_point_blank.configuration import LogMode
-from end_point_blank.django import authorized
+from end_point_blank.django import authenticated, authorized
 from end_point_blank.django.versioned import versioned
 
 import db
@@ -50,6 +50,34 @@ epb.Configuration().log_base_url = INTAKE_URL
 
 def status(request):
     return JsonResponse({"status": "ok"}, status=200)
+
+
+# ---------------------------------------------------------------------------
+# Who am I -- the one route behind `authenticated` rather than `authorized`
+# ---------------------------------------------------------------------------
+
+# These are two different code paths through the SDK: `authorized` asks intake
+# whether a grant covers this endpoint, `authenticated` asks only whether the
+# credential itself is good. Until now every route here -- and every route in
+# all five epb_test_* applications -- used `authorized`, so nothing anywhere
+# called the second one. That is how the authenticate path in the JS and Java
+# SDKs dropped intake's refusal status for two releases without a test going
+# red (sc-307): a pass/fail count over these applications cannot see a code
+# path nothing calls.
+#
+# Unlike those two, this SDK's decorators are genuinely one decision written
+# twice: both go through the same `_route_path(request)` and the same
+# `refusal_from`, so the path and the status agree by construction. That is
+# worth having a route to keep true rather than a comment asserting it.
+#
+# No `@versioned`: endpoint versions belong to the authorize path, which
+# resolves a specific endpoint. Authentication judges the credential.
+@authenticated
+def whoami(request):
+    return JsonResponse(
+        {"application": epb.Configuration().app_name, "authenticated": True},
+        status=200,
+    )
 
 
 # ---------------------------------------------------------------------------

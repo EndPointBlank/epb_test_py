@@ -39,7 +39,12 @@ class AuthorizationTest(MeshTestCase):
 
         response = self.relay(hops="3")
 
-        self.assertEqual(response.status_code, 401)
+        # `refuse_authorization()` makes intake answer 403 -- access_denied,
+        # meaning the credential is fine and no grant covers this endpoint.
+        # This asserted 401 until the SDK stopped collapsing every refusal to
+        # that status (sc-299): the assertion was pinning the bug rather than
+        # the contract, and it read as correct because the two agreed.
+        self.assertEqual(response.status_code, 403)
         self.assertIn("Authorization failed", response.json()["error"])
         self.assertEqual(caller.calls, [], "a refused request must call nobody")
 
@@ -50,7 +55,8 @@ class AuthorizationTest(MeshTestCase):
 
         response = self.relay(hops="3", path="/mesh/reports")
 
-        self.assertEqual(response.status_code, 401)
+        # 403, for the same reason as above.
+        self.assertEqual(response.status_code, 403)
         self.assertEqual(caller.calls, [])
 
     def test_relay_consults_authorization_for_its_own_route(self):

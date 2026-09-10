@@ -3,6 +3,7 @@ import views
 
 urlpatterns = [
     path("status", views.status),
+    path("whoami", views.whoami),
     path("schools", views.schools),
     path("schools/<int:school_id>", views.school),
     path("classes", views.classes),
