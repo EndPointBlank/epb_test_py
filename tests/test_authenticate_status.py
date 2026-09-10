@@ -73,6 +73,15 @@ class StubIntake:
                         # judging. `path` is the assertion that catches a guard
                         # resolving the endpoint differently from the other one.
                         "path": parsed.get("path"),
+                        # BOTH keys, deliberately. intake reads `http_method`;
+                        # `action` is the spelling the ports carried until
+                        # sc-320 and is refused with :invalid_params. Recording
+                        # only `action` -- which this stub did until
+                        # 2026-09-10 -- let the double and the assertion agree
+                        # with each other about a key intake never reads, which
+                        # is exactly how a key-shape bug survives an in-process
+                        # double.
+                        "http_method": parsed.get("http_method"),
                         "action": parsed.get("action"),
                         "client_auth": parsed.get("client_auth"),
                     }
@@ -172,7 +181,18 @@ class AuthenticateStatusTest(SimpleTestCase):
 
         only = intake.calls[0]
         self.assertEqual(only["url"], "/api/authorize")
-        self.assertEqual(only["action"], "GET")
+        # `http_method`, not `action`. intake's AuthorizeAccess.authorize/1
+        # matches on http_method and has no clause for action, so a payload
+        # carrying the latter falls through to {:error, :invalid_params} and is
+        # refused whatever credential it presents (sc-320). This assertion read
+        # `action` until 2026-09-10 and therefore pinned the bug: it passed
+        # against an SDK intake could never authenticate.
+        self.assertEqual(only["http_method"], "GET")
+        self.assertIsNone(
+            only.get("action"),
+            "the wire key is `http_method`; `action` means something else on "
+            "intake's registration endpoints and must not reappear here",
+        )
         self.assertTrue(only["client_auth"].startswith("Basic caller-"))
 
     # -- the contract: intake's own status, not a blanket 401 ----------------
