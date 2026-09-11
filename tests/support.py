@@ -29,10 +29,15 @@ from urllib.parse import urlsplit
 from django.test import SimpleTestCase
 
 import mesh
+from tests.intake_authorize import granted
 
 
 class FakeAuthorizeResponse:
-    """What ``EndpointAuthorize.authorize`` hands back: something with a status."""
+    """What ``EndpointAuthorize.authorize`` hands back: something with a status.
+
+    A grant should carry intake's real body (``tests/intake_authorize.py``), not
+    an empty one. An empty 201 agrees with any reading of it, right or wrong.
+    """
 
     def __init__(self, status_code: int, body: dict | None = None) -> None:
         self.status_code = status_code
@@ -176,7 +181,7 @@ class MeshTestCase(SimpleTestCase):
         super().setUp()
         self.authorize = mock.patch(
             "end_point_blank.commands.endpoint_authorize.EndpointAuthorize.authorize",
-            return_value=FakeAuthorizeResponse(201),
+            return_value=FakeAuthorizeResponse(201, granted()),
         ).start()
         for target in (
             "end_point_blank.writers.request_writer.RequestWriter.write",

@@ -47,12 +47,17 @@ from unittest import mock
 from django.test import SimpleTestCase
 
 import end_point_blank as epb
+from tests.intake_authorize import granted
+
+# A 201 answers with intake's real grant unless a test says otherwise. It was
+# `{}` until sc-483, which carried no grant at all.
+GRANTED = json.dumps(granted())
 
 
 class StubIntake:
     """A real intake, on loopback, for the length of one test."""
 
-    def __init__(self, status: int = 201, body: str = "{}") -> None:
+    def __init__(self, status: int = 201, body: str = GRANTED) -> None:
         self.status = status
         self.body = body
         self.calls: list[dict] = []
@@ -112,7 +117,7 @@ class StubIntake:
         self._server.server_close()
         self._thread.join(timeout=5)
 
-    def answer_with(self, status: int, body: str = "{}") -> None:
+    def answer_with(self, status: int, body: str = GRANTED) -> None:
         self.status = status
         self.body = body
 
